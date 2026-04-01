@@ -49,6 +49,7 @@ npm run build:web
 
 ## Pull request guidance
 
+- Use the GitHub issue templates and `.github/pull_request_template.md` when opening public repo work
 - Explain the problem being solved and any user-visible impact
 - Call out configuration, deployment, or migration implications
 - Add or update tests when behavior changes

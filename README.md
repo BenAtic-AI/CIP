@@ -1,5 +1,8 @@
 # CIP
 
+[![CI](https://github.com/BenAtic-AI/CIP/actions/workflows/ci.yml/badge.svg)](https://github.com/BenAtic-AI/CIP/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/BenAtic-AI/CIP/blob/main/LICENSE)
+
 CIP is an Azure-first customer intelligence MVP monorepo. It includes a .NET API, a background worker, a React web app, and Bicep templates for deploying the current Azure hosting baseline.
 
 The repository is intended to be public-facing and secretless: checked-in configuration stays non-secret, while environment-specific values are supplied through local configuration, GitHub variables/secrets, or Azure-managed identity and RBAC.
@@ -7,7 +10,9 @@ The repository is intended to be public-facing and secretless: checked-in config
 ## Status
 
 - Active MVP codebase with a working Azure deployment baseline
-- Backend and frontend authentication hooks exist, but Entra configuration is still environment-specific and feature-flagged off by default
+- Live dev now has Entra auth enabled for the API and frontend
+- API health stays anonymous in dev, while protected endpoints return `401 Unauthorized` without a bearer token
+- Repo-tracked defaults still keep Entra feature flags off until environment variables are supplied
 - Infrastructure examples still require real container image references before a new environment is usable
 
 ## What is included
@@ -17,6 +22,7 @@ The repository is intended to be public-facing and secretless: checked-in config
 - **Infrastructure**: Azure-ready **Bicep** for ACR, Container Apps, Storage, Cosmos DB, Key Vault, Azure AI runtime, Azure AI Foundry hub/project, Static Web Apps, and monitoring
 - **Containers**: Dockerfiles for `Cip.Api` and `Cip.Worker`
 - **CI/CD**: GitHub Actions workflows for validation and deployment
+- **GitHub hygiene**: issue templates and a pull request template for public repo contributions
 - **Docs**: local setup, deployment prerequisites, and architecture notes
 
 ## Repository layout
@@ -108,6 +114,7 @@ npm run build:web
 - Do **not** commit secrets, keys, connection strings, `.env` files, or exported portal values
 - Prefer **managed identity** and `DefaultAzureCredential` for deployed Azure access
 - Use environment variables, `.NET` user secrets, or untracked local override files for local development
+- GitHub Actions repository variables and secrets still need manual setup in the GitHub UI
 - Backend JSON serialization should remain on `System.Text.Json`
 
 ## Known follow-up

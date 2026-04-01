@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Project documentation
+    url: https://github.com/BenAtic-AI/CIP#readme
+    about: Start with the README and linked docs for setup, architecture, and deployment guidance.
+  - name: Contributing guide
+    url: https://github.com/BenAtic-AI/CIP/blob/main/CONTRIBUTING.md
+    about: Review contribution expectations, validation commands, and PR guidance before opening work.

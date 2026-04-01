@@ -40,8 +40,11 @@ The Container Apps baseline also injects the main runtime environment values for
 ## Auth baseline
 
 - Entra authentication exists in both the API and frontend
-- It stays feature-flagged off by default until configuration is supplied
+- Live dev currently has Entra auth enabled for both
+- API health remains anonymous, while protected endpoints return `401 Unauthorized` without a token
+- Repo-tracked defaults still stay feature-flagged off until configuration is supplied
 - Authentication-related app registrations and OIDC configuration are environment-specific and are not fully provisioned by the current Bicep templates
+- The current dev frontend deployment was published with Entra config enabled
 - Keep client IDs, tenant IDs, audiences, and redirect URIs in Azure/GitHub/local configuration rather than in repo-tracked files
 
 ## Authentication and secrets policy
@@ -99,6 +102,7 @@ Important current limitation:
 - `.github/workflows/deploy-dev.yml` handles a dev-style deployment flow for infra, backend images, and optional Static Web Apps publish
 - `deploy-dev` requires GitHub repository variables for `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, and `AZURE_ACR_NAME`
 - Static Web Apps deployment is optional and only runs when `AZURE_STATIC_WEB_APPS_API_TOKEN` is configured
+- Repository variables and secrets are still configured manually in the GitHub UI; they are not bootstrapped automatically here
 
 ## GitHub repository configuration
 
@@ -114,10 +118,10 @@ Optional repository variables:
 
 - `AZURE_LOCATION`
 - `AZURE_NAME_PREFIX`
-- `AZURE_API_ENTRA_AUTH_ENABLED` - keep `false` until auth config is ready
+- `AZURE_API_ENTRA_AUTH_ENABLED` - repo-safe default is `false`; set it in GitHub UI when an environment should require auth
 - `AZURE_API_ENTRA_AUTHORITY`
 - `AZURE_API_ENTRA_AUTH_AUDIENCE` - audience or app ID URI for the API app registration
-- `VITE_ENTRA_ENABLED` - keep empty or `false` until frontend auth is ready
+- `VITE_ENTRA_ENABLED` - repo-safe default is empty or `false`; set it in GitHub UI when frontend auth is ready
 - `VITE_ENTRA_TENANT_ID`
 - `VITE_ENTRA_CLIENT_ID` - client ID for the SPA app registration
 - `VITE_ENTRA_API_SCOPES`

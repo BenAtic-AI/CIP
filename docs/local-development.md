@@ -47,7 +47,9 @@ No live Azure credentials or fixed environment IDs are checked in.
 ## Auth baseline
 
 - Entra authentication exists in both the API and frontend
-- It is feature-flagged off by default, so local API requests continue without bearer tokens until you configure it
+- Local repo defaults keep it feature-flagged off, so local API requests continue without bearer tokens until you configure it
+- Live dev is different: Entra auth is enabled, API health stays anonymous, and protected endpoints return `401 Unauthorized` without a token
+- The current dev frontend deployment was published with Entra config enabled
 - Use app registrations and client IDs for your own environment when enabling auth locally
 - Do not commit tenant IDs, client IDs, audiences, or redirect URIs as fixed values unless they are intentionally public-safe placeholders
 
@@ -122,6 +124,7 @@ If you switch to a direct frontend-to-API URL with `VITE_API_BASE_URL`, keep tha
 - `.github/workflows/ci.yml` covers backend validation and frontend typecheck/build
 - `.github/workflows/deploy-dev.yml` supports a dev-style deployment flow with GitHub OIDC variables
 - Static Web Apps deployment from that workflow is optional and depends on `AZURE_STATIC_WEB_APPS_API_TOKEN`
+- GitHub Actions repository variables and secrets still need manual setup in the GitHub UI
 
 ## Cloud build handoff
 
