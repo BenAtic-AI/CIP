@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "dev"
+    },
+    "location": {
+      "value": "swedencentral"
+    },
+    "namePrefix": {
+      "value": "cipmvp"
+    },
+    "apiImage": {
+      "value": "mcr.microsoft.com/dotnet/samples:aspnetapp"
+    },
+    "workerImage": {
+      "value": "mcr.microsoft.com/dotnet/runtime:10.0"
+    },
+    "applicationEnvironment": {
+      "value": "Production"
+    },
+    "aiEmbeddingsDeployment": {
+      "value": "text-embedding-3-large"
+    },
+    "aiChatDeployment": {
+      "value": "gpt-4.1-mini"
+    },
+    "entraAuthEnabled": {
+      "value": false
+    },
+    "entraAuthority": {
+      "value": ""
+    },
+    "entraAudience": {
+      "value": ""
+    }
+  }
+}

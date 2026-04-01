@@ -1,0 +1,19 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/backend/">
+    <Project Path="src/backend/Cip.Api/Cip.Api.csproj" />
+    <Project Path="src/backend/Cip.Application/Cip.Application.csproj" />
+    <Project Path="src/backend/Cip.Contracts/Cip.Contracts.csproj" />
+    <Project Path="src/backend/Cip.Domain/Cip.Domain.csproj" />
+    <Project Path="src/backend/Cip.Infrastructure/Cip.Infrastructure.csproj" />
+    <Project Path="src/backend/Cip.Worker/Cip.Worker.csproj" />
+    <Project Path="src/backend/Integrations.Cosmos/Integrations.Cosmos.csproj" />
+    <Project Path="src/backend/Integrations.AzureAi/Integrations.AzureAi.csproj" />
+    <Project Path="src/backend/Integrations.Storage/Integrations.Storage.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Cip.ApiTests/Cip.ApiTests.csproj" />
+    <Project Path="tests/Cip.IntegrationTests/Cip.IntegrationTests.csproj" />
+    <Project Path="tests/Cip.UnitTests/Cip.UnitTests.csproj" />
+  </Folder>
+</Solution>

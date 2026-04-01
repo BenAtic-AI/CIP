@@ -1,0 +1,214 @@
+name: Deploy Dev
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/deploy-dev.yml'
+      - '.github/workflows/ci.yml'
+      - 'infra/**'
+      - 'CIP.slnx'
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'src/backend/**'
+      - 'src/web/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: true
+
+env:
+  AZURE_ENVIRONMENT_NAME: dev
+  BICEP_TEMPLATE_PATH: infra/bicep/main.bicep
+  BICEP_PARAMETERS_PATH: infra/bicep/main.parameters.example.json
+  API_IMAGE_NAME: cip/api
+  WORKER_IMAGE_NAME: cip/worker
+  # Required GitHub repository variables for OIDC-based Azure deploys:
+  # - AZURE_CLIENT_ID
+  # - AZURE_TENANT_ID
+  # - AZURE_SUBSCRIPTION_ID
+  # - AZURE_RESOURCE_GROUP
+  # - AZURE_ACR_NAME
+  # Optional GitHub repository variables:
+  # - AZURE_LOCATION
+  # - AZURE_NAME_PREFIX
+  # - AZURE_API_ENTRA_AUTH_ENABLED (defaults to false)
+  # - AZURE_API_ENTRA_AUTHORITY
+  # - AZURE_API_ENTRA_AUTH_AUDIENCE
+  # - VITE_ENTRA_ENABLED
+  # - VITE_ENTRA_TENANT_ID
+  # - VITE_ENTRA_CLIENT_ID
+  # - VITE_ENTRA_API_SCOPES
+  # - VITE_ENTRA_AUTHORITY
+  # - VITE_ENTRA_LOGIN_SCOPES
+  # - VITE_ENTRA_REDIRECT_URI
+  # Optional GitHub repository secret if Static Web Apps still uses a deploy token:
+  # - AZURE_STATIC_WEB_APPS_API_TOKEN
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required GitHub variables
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for key in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_RESOURCE_GROUP AZURE_ACR_NAME; do
+            if [ -z "${!key}" ]; then
+              missing+=("$key")
+            fi
+          done
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf 'Missing required GitHub repository variables: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve image references
+        id: images
+        shell: bash
+        env:
+          AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+        run: |
+          set -euo pipefail
+
+          image_tag="${GITHUB_SHA::12}"
+          login_server="$(az acr show --name "$AZURE_ACR_NAME" --query loginServer -o tsv)"
+
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+          echo "api_image=${login_server}/${API_IMAGE_NAME}:${image_tag}" >> "$GITHUB_OUTPUT"
+          echo "worker_image=${login_server}/${WORKER_IMAGE_NAME}:${image_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Build API image in ACR
+        shell: bash
+        env:
+          AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+        run: |
+          set -euo pipefail
+
+          az acr build \
+            --registry "$AZURE_ACR_NAME" \
+            --image "${API_IMAGE_NAME}:${{ steps.images.outputs.image_tag }}" \
+            --file src/backend/Cip.Api/Dockerfile \
+            .
+
+      - name: Build worker image in ACR
+        shell: bash
+        env:
+          AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+        run: |
+          set -euo pipefail
+
+          az acr build \
+            --registry "$AZURE_ACR_NAME" \
+            --image "${WORKER_IMAGE_NAME}:${{ steps.images.outputs.image_tag }}" \
+            --file src/backend/Cip.Worker/Dockerfile \
+            .
+
+      - name: Deploy infrastructure and app settings
+        id: deploy_infra
+        shell: bash
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_LOCATION: ${{ vars.AZURE_LOCATION || '' }}
+          AZURE_NAME_PREFIX: ${{ vars.AZURE_NAME_PREFIX || '' }}
+          AZURE_API_ENTRA_AUTH_ENABLED: ${{ vars.AZURE_API_ENTRA_AUTH_ENABLED || 'false' }}
+          AZURE_API_ENTRA_AUTHORITY: ${{ vars.AZURE_API_ENTRA_AUTHORITY || '' }}
+          AZURE_API_ENTRA_AUTH_AUDIENCE: ${{ vars.AZURE_API_ENTRA_AUTH_AUDIENCE || '' }}
+        run: |
+          set -euo pipefail
+
+          location_args=()
+          name_prefix_args=()
+          deployment_name="cip-dev-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+
+          if [ -n "$AZURE_LOCATION" ]; then
+            location_args+=("location=$AZURE_LOCATION")
+          fi
+
+          if [ -n "$AZURE_NAME_PREFIX" ]; then
+            name_prefix_args+=("namePrefix=$AZURE_NAME_PREFIX")
+          fi
+
+          api_container_app_name="$(az deployment group create \
+            --name "$deployment_name" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file "$BICEP_TEMPLATE_PATH" \
+            --parameters @"$BICEP_PARAMETERS_PATH" \
+            environmentName="$AZURE_ENVIRONMENT_NAME" \
+            apiImage="${{ steps.images.outputs.api_image }}" \
+            workerImage="${{ steps.images.outputs.worker_image }}" \
+            entraAuthEnabled=$AZURE_API_ENTRA_AUTH_ENABLED \
+            entraAuthority="$AZURE_API_ENTRA_AUTHORITY" \
+            entraAudience="$AZURE_API_ENTRA_AUTH_AUDIENCE" \
+            "${location_args[@]}" \
+            "${name_prefix_args[@]}" \
+            --query "properties.outputs.apiContainerAppName.value" \
+            -o tsv)"
+
+          api_fqdn="$(az containerapp show \
+            --name "$api_container_app_name" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query "properties.configuration.ingress.fqdn" \
+            -o tsv)"
+
+          if [ -z "$api_fqdn" ]; then
+            printf 'Unable to resolve API ingress FQDN for container app %s\n' "$api_container_app_name" >&2
+            exit 1
+          fi
+
+          echo "api_base_url=https://${api_fqdn}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Static Web App
+        if: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN != '' }}
+        uses: Azure/static-web-apps-deploy@v1
+        env:
+          VITE_API_BASE_URL: ${{ steps.deploy_infra.outputs.api_base_url }}
+          VITE_ENTRA_ENABLED: ${{ vars.VITE_ENTRA_ENABLED || '' }}
+          VITE_ENTRA_TENANT_ID: ${{ vars.VITE_ENTRA_TENANT_ID || '' }}
+          VITE_ENTRA_CLIENT_ID: ${{ vars.VITE_ENTRA_CLIENT_ID || '' }}
+          VITE_ENTRA_API_SCOPES: ${{ vars.VITE_ENTRA_API_SCOPES || '' }}
+          VITE_ENTRA_AUTHORITY: ${{ vars.VITE_ENTRA_AUTHORITY || '' }}
+          VITE_ENTRA_LOGIN_SCOPES: ${{ vars.VITE_ENTRA_LOGIN_SCOPES || '' }}
+          VITE_ENTRA_REDIRECT_URI: ${{ vars.VITE_ENTRA_REDIRECT_URI || '' }}
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: /
+          api_location: ''
+          output_location: src/web/cip-web/dist
+          app_build_command: npm ci && npm run build:web
+
+      - name: Skip Static Web App deploy when token is absent
+        if: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN == '' }}
+        run: |
+          echo "AZURE_STATIC_WEB_APPS_API_TOKEN is not configured; skipping Static Web Apps deployment."

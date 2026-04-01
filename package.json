@@ -1,0 +1,12 @@
+{
+  "name": "cip-monorepo",
+  "private": true,
+  "workspaces": [
+    "src/web/cip-web"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace src/web/cip-web run dev",
+    "build:web": "npm --workspace src/web/cip-web run build",
+    "typecheck:web": "npm --workspace src/web/cip-web run typecheck"
+  }
+}
