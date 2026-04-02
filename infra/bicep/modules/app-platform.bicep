@@ -46,6 +46,9 @@ param aiEndpoint string
 @description('Azure AI embeddings deployment name used by the app runtime.')
 param aiEmbeddingsDeployment string
 
+@description('Azure AI embeddings dimensions used by the app runtime.')
+param aiEmbeddingsDimensions int
+
 @description('Azure AI chat deployment name used by the app runtime.')
 param aiChatDeployment string
 
@@ -122,6 +125,10 @@ var sharedRuntimeEnvironmentVariables = [
   {
     name: 'AzureResources__AI__EmbeddingsDeployment'
     value: aiEmbeddingsDeployment
+  }
+  {
+    name: 'AzureResources__AI__EmbeddingsDimensions'
+    value: string(aiEmbeddingsDimensions)
   }
   {
     name: 'AzureResources__AI__ChatDeployment'

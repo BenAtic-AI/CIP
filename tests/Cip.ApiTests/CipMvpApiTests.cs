@@ -110,6 +110,52 @@ public sealed class CipMvpApiTests
         Assert.Equal(profile.ProfileId, Assert.Single(run.MatchedProfiles).ProfileId);
     }
 
+    [Fact]
+    public async Task PostProfileSearch_ReturnsRankedResults()
+    {
+        using var factory = new WebApplicationFactory<Program>();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var financeRequest = CreateEventRequest("tenant-search", "event-finance", "Finance", "analyst@contoso.com");
+        var legalRequest = CreateEventRequest("tenant-search", "event-legal", "Legal", "reviewer@contoso.com");
+
+        var financeIngestionResponse = await client.PostAsJsonAsync("/api/events", financeRequest);
+        var financeIngestion = await financeIngestionResponse.Content.ReadFromJsonAsync<IngestEventResponse>();
+        financeIngestionResponse.EnsureSuccessStatusCode();
+
+        var legalIngestionResponse = await client.PostAsJsonAsync("/api/events", legalRequest);
+        var legalIngestion = await legalIngestionResponse.Content.ReadFromJsonAsync<IngestEventResponse>();
+        legalIngestionResponse.EnsureSuccessStatusCode();
+
+        var financeApprovalResponse = await client.PostAsJsonAsync(
+            $"/api/change-sets/{financeIngestion!.ChangeSetId}/approve",
+            new ReviewChangeSetRequest(financeRequest.TenantId, "reviewer@contoso.com", "approved"));
+        financeApprovalResponse.EnsureSuccessStatusCode();
+
+        var legalApprovalResponse = await client.PostAsJsonAsync(
+            $"/api/change-sets/{legalIngestion!.ChangeSetId}/approve",
+            new ReviewChangeSetRequest(legalRequest.TenantId, "reviewer@contoso.com", "approved"));
+        legalApprovalResponse.EnsureSuccessStatusCode();
+
+        var searchResponse = await client.PostAsJsonAsync(
+            "/api/profiles/search",
+            new ProfileSearchRequest(financeRequest.TenantId, "finance analyst", 5));
+
+        Assert.Equal(HttpStatusCode.OK, searchResponse.StatusCode);
+
+        var search = await searchResponse.Content.ReadFromJsonAsync<ProfileSearchResponse>();
+        Assert.NotNull(search);
+        Assert.Equal("finance analyst", search!.QueryText);
+        Assert.Equal(2, search.Results.Count);
+
+        var rankedResults = search.Results.ToArray();
+        Assert.Equal(financeIngestion.ProfileId, rankedResults[0].Profile.ProfileId);
+        Assert.Equal(legalIngestion.ProfileId, rankedResults[1].Profile.ProfileId);
+        Assert.True(rankedResults[0].SimilarityScore > rankedResults[1].SimilarityScore);
+        Assert.Contains(rankedResults[0].SharedTraits, trait => trait.Name == "Department" && trait.Value == "Finance");
+        Assert.Contains(rankedResults[0].SharedIdentities, identity => identity.Type == "Email" && identity.Value == "analyst@contoso.com");
+    }
+
     private static IngestEventRequest CreateEventRequest(string tenantId, string eventId, string department, string email)
         => new(
             tenantId,

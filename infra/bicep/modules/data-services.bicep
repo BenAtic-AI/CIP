@@ -7,13 +7,22 @@ param location string
 @description('Prefix used for Azure resource naming.')
 param namePrefix string
 
+@description('Cosmos DB operational container name used by the application runtime.')
+param cosmosOperationalContainerName string
+
+@description('Document path that stores the operational synopsis embedding vector.')
+param operationalVectorPath string
+
+@description('Embedding dimensions for the operational synopsis vector.')
+param operationalVectorDimensions int
+
 param tags object
 
 var storageAccountName = take(replace(toLower('${namePrefix}${environmentName}stg'), '-', ''), 24)
 var cosmosAccountName = toLower('${namePrefix}-${environmentName}-cosmos')
 var cosmosDatabaseName = 'cip'
 var cosmosEventsContainerName = 'events'
-var cosmosOperationalContainerName = 'operational'
+var cosmosLegacyOperationalContainerName = 'operational'
 var cosmosLeasesContainerName = 'leases'
 var keyVaultName = '${take(toLower('${namePrefix}-${environmentName}-kv'), 11)}${uniqueString(resourceGroup().id)}'
 var aiAccountName = toLower('${namePrefix}-${environmentName}-aoai')
@@ -77,6 +86,9 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
       {
         name: 'EnableServerless'
       }
+      {
+        name: 'EnableNoSQLVectorSearch'
+      }
     ]
   }
 }
@@ -108,6 +120,22 @@ resource eventsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
 }
 
 resource operationalContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  name: cosmosLegacyOperationalContainerName
+  parent: cosmosDatabase
+  properties: {
+    resource: {
+      id: cosmosLegacyOperationalContainerName
+      partitionKey: {
+        paths: [
+          '/tenantId'
+        ]
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
+resource vectorOperationalContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   name: cosmosOperationalContainerName
   parent: cosmosDatabase
   properties: {
@@ -118,6 +146,39 @@ resource operationalContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabase
           '/tenantId'
         ]
         kind: 'Hash'
+      }
+      vectorEmbeddingPolicy: {
+        vectorEmbeddings: [
+          {
+            path: operationalVectorPath
+            dataType: 'float32'
+            dimensions: operationalVectorDimensions
+            distanceFunction: 'cosine'
+          }
+        ]
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/*'
+          }
+        ]
+        excludedPaths: [
+          {
+            path: '/_etag/?'
+          }
+          {
+            path: '${operationalVectorPath}/*'
+          }
+        ]
+        vectorIndexes: [
+          {
+            path: operationalVectorPath
+            type: 'diskANN'
+          }
+        ]
       }
     }
   }
@@ -177,7 +238,7 @@ output cosmosAccountId string = cosmosAccount.id
 output cosmosAccountEndpoint string = cosmosAccount.properties.documentEndpoint
 output cosmosDatabaseName string = cosmosDatabase.name
 output cosmosEventsContainerName string = eventsContainer.name
-output cosmosOperationalContainerName string = operationalContainer.name
+output cosmosOperationalContainerName string = vectorOperationalContainer.name
 output cosmosLeasesContainerName string = leasesContainer.name
 output keyVaultName string = keyVault.name
 output keyVaultId string = keyVault.id

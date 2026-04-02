@@ -5,6 +5,7 @@ using Cip.Contracts.Profiles;
 using Cip.Contracts.Shared;
 using Cip.Contracts.Triggers;
 using Cip.Domain.Documents;
+using System.Text.RegularExpressions;
 
 namespace Cip.Application.Features.CipMvp;
 
@@ -13,6 +14,7 @@ public interface ICipMvpService
     Task<IngestEventResponse> IngestEventAsync(IngestEventRequest request, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<ProfileResponse>> ListProfilesAsync(string tenantId, CancellationToken cancellationToken);
     Task<ProfileResponse?> GetProfileAsync(string tenantId, string profileId, CancellationToken cancellationToken);
+    Task<ProfileSearchResponse> SearchProfilesAsync(ProfileSearchRequest request, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<ChangeSetResponse>> ListChangeSetsAsync(string tenantId, string? status, CancellationToken cancellationToken);
     Task<ChangeSetResponse?> GetChangeSetAsync(string tenantId, string changeSetId, CancellationToken cancellationToken);
     Task<ChangeSetResponse?> ApproveChangeSetAsync(string tenantId, string changeSetId, string reviewedBy, string? comment, CancellationToken cancellationToken);
@@ -27,8 +29,10 @@ public interface IProcessingStatusService
     Task<ProcessingStatusSnapshot> GetStatusAsync(CancellationToken cancellationToken);
 }
 
-public sealed class CipMvpService(ICipRuntimeStore store) : ICipMvpService, IProcessingStatusService
+public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingService profileTextEmbeddingService) : ICipMvpService, IProcessingStatusService
 {
+    private const int DefaultProfileSearchLimit = 5;
+    private const int MaxProfileSearchLimit = 25;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public async Task<IngestEventResponse> IngestEventAsync(IngestEventRequest request, CancellationToken cancellationToken)
@@ -73,8 +77,9 @@ public sealed class CipMvpService(ICipRuntimeStore store) : ICipMvpService, IPro
             {
                 Status = Constants.Profiles.PendingReview,
                 UpdatedAt = receivedAt,
-                Synopsis = BuildSynopsis(request.EventType, request.Source, proposedIdentities.Length, proposedTraits.Length)
+                Synopsis = BuildPendingSynopsis(request.EventType, request.Source, profile.Identities, profile.Traits, proposedIdentities, proposedTraits)
             };
+            effectiveProfile = await PopulateSynopsisVectorAsync(effectiveProfile, cancellationToken);
 
             var changeSet = new ChangeSetDocument(
                 Id: changeSetId,
@@ -150,6 +155,35 @@ public sealed class CipMvpService(ICipRuntimeStore store) : ICipMvpService, IPro
         return profile is null ? null : await MapProfileAsync(profile, cancellationToken);
     }
 
+    public async Task<ProfileSearchResponse> SearchProfilesAsync(ProfileSearchRequest request, CancellationToken cancellationToken)
+    {
+        ValidateSearchRequest(request);
+
+        var queryText = request.QueryText.Trim();
+        var limit = ResolveSearchLimit(request.Limit);
+        var queryVector = (await profileTextEmbeddingService.EmbedAsync(queryText, cancellationToken)).ToArray();
+        if (queryVector.Length == 0 || ComputeMagnitude(queryVector) == 0d)
+        {
+            return new ProfileSearchResponse(request.TenantId, queryText, limit, []);
+        }
+
+        var queryTerms = ExtractSearchTerms(queryText);
+        var rankedCandidates = await SearchProfileCandidatesAsync(request.TenantId, queryVector, queryTerms, limit, cancellationToken);
+
+        var results = new List<ProfileSearchResult>(rankedCandidates.Length);
+        foreach (var candidate in rankedCandidates)
+        {
+            results.Add(new ProfileSearchResult(
+                await MapProfileAsync(candidate.Profile, cancellationToken),
+                candidate.Similarity,
+                candidate.SharedIdentities,
+                candidate.SharedTraits,
+                new ProfileSearchEvidenceResponse(queryText, candidate.Profile.Synopsis, candidate.MatchedTerms)));
+        }
+
+        return new ProfileSearchResponse(request.TenantId, queryText, limit, results);
+    }
+
     public async Task<IReadOnlyCollection<ChangeSetResponse>> ListChangeSetsAsync(string tenantId, string? status, CancellationToken cancellationToken)
     {
         ValidateTenantId(tenantId);
@@ -186,7 +220,7 @@ public sealed class CipMvpService(ICipRuntimeStore store) : ICipMvpService, IPro
             var profile = await store.GetProfileAsync(tenantId, changeSet.TargetProfileId, cancellationToken)
                 ?? throw new InvalidOperationException($"Profile '{changeSet.TargetProfileId}' was not found.");
 
-            var updatedProfile = ApplyApprovedChanges(profile, changeSet);
+            var updatedProfile = await PopulateSynopsisVectorAsync(ApplyApprovedChanges(profile, changeSet), cancellationToken);
             var now = DateTimeOffset.UtcNow;
 
             var reviewedChangeSet = changeSet with
@@ -359,8 +393,31 @@ public sealed class CipMvpService(ICipRuntimeStore store) : ICipMvpService, IPro
             UpdatedAt: now);
     }
 
-    private static string BuildSynopsis(string eventType, string source, int identityCount, int traitCount)
-        => $"Pending {eventType} materialization from {source} with {identityCount} identities and {traitCount} traits.";
+    private static string BuildPendingSynopsis(
+        string eventType,
+        string source,
+        IReadOnlyCollection<ProfileIdentity> currentIdentities,
+        IReadOnlyCollection<ProfileTrait> currentTraits,
+        IReadOnlyCollection<ProfileIdentity> proposedIdentities,
+        IReadOnlyCollection<ProfileTrait> proposedTraits)
+    {
+        var mergedIdentities = currentIdentities
+            .Concat(proposedIdentities)
+            .DistinctBy(identity => $"{identity.Type}::{identity.Value}", StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var mergedTraits = currentTraits.ToDictionary(trait => trait.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (var trait in proposedTraits)
+        {
+            mergedTraits[trait.Name] = trait;
+        }
+
+        return $"Pending {eventType} materialization from {source}. "
+            + $"Profile identities: {FormatIdentitySummary(mergedIdentities)}. "
+            + $"Profile traits: {FormatTraitSummary(mergedTraits.Values)}. "
+            + $"Proposed identities: {FormatIdentitySummary(proposedIdentities)}. "
+            + $"Proposed traits: {FormatTraitSummary(proposedTraits)}.";
+    }
 
     private static string[] BuildOperations(IReadOnlyCollection<ProfileIdentity> identities, IReadOnlyCollection<ProfileTrait> traits)
     {
@@ -398,7 +455,56 @@ public sealed class CipMvpService(ICipRuntimeStore store) : ICipMvpService, IPro
             Status = Constants.Profiles.Ready,
             Identities = identities,
             Traits = traits.Values.OrderBy(trait => trait.Name, StringComparer.OrdinalIgnoreCase).ToArray(),
-            Synopsis = $"Approved profile with {identities.Count} identities and {traits.Count} traits."
+            Synopsis = BuildApprovedSynopsis(identities, traits.Values)
+        };
+    }
+
+    private static string BuildApprovedSynopsis(IEnumerable<ProfileIdentity> identities, IEnumerable<ProfileTrait> traits)
+        => $"Approved profile. Identities: {FormatIdentitySummary(identities)}. Traits: {FormatTraitSummary(traits)}.";
+
+    private async Task<RankedProfileCandidate[]> SearchProfileCandidatesAsync(
+        string tenantId,
+        IReadOnlyList<float> queryVector,
+        IReadOnlyCollection<string> queryTerms,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (store is IProfileVectorSearchRuntimeStore vectorSearchStore)
+        {
+            try
+            {
+                var nativeMatches = await vectorSearchStore.SearchProfilesBySynopsisVectorAsync(tenantId, queryVector, limit, cancellationToken);
+                return nativeMatches
+                    .Select(match => CreateRankedProfileCandidate(queryTerms, match.Profile, match.SimilarityScore))
+                    .ToArray();
+            }
+            catch (ProfileVectorSearchUnavailableException)
+            {
+            }
+        }
+
+        var profiles = await store.ListProfilesAsync(tenantId, cancellationToken);
+        return profiles
+            .Where(profile => profile.SynopsisVector is { Count: > 0 })
+            .Select(profile => CreateRankedProfileCandidate(queryTerms, profile, CalculateCosineSimilarity(queryVector, profile.SynopsisVector!)))
+            .OrderByDescending(candidate => candidate.Similarity)
+            .ThenByDescending(candidate => candidate.MatchedTerms.Count)
+            .ThenByDescending(candidate => candidate.Profile.UpdatedAt)
+            .Take(limit)
+            .ToArray();
+    }
+
+    private async Task<ProfileDocument> PopulateSynopsisVectorAsync(ProfileDocument profile, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(profile.Synopsis))
+        {
+            return profile with { SynopsisVector = null };
+        }
+
+        var vector = await profileTextEmbeddingService.EmbedAsync(profile.Synopsis, cancellationToken);
+        return profile with
+        {
+            SynopsisVector = vector.Count == 0 ? null : vector.ToArray()
         };
     }
 
@@ -457,6 +563,143 @@ public sealed class CipMvpService(ICipRuntimeStore store) : ICipMvpService, IPro
             trigger.Conditions.Select(item => new TriggerConditionResponse(item.Operator, item.Attribute, item.Value)).ToArray(),
             trigger.CreatedAt,
             trigger.LastRunAt);
+
+    private static string FormatIdentitySummary(IEnumerable<ProfileIdentity> identities)
+    {
+        var values = identities
+            .Select(identity => $"{identity.Type}:{identity.Value}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return values.Length == 0 ? "none" : string.Join(", ", values);
+    }
+
+    private static string FormatTraitSummary(IEnumerable<ProfileTrait> traits)
+    {
+        var values = traits
+            .Select(trait => $"{trait.Name}={trait.Value}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return values.Length == 0 ? "none" : string.Join(", ", values);
+    }
+
+    private static IReadOnlyCollection<string> ExtractSearchTerms(string text)
+        => Regex.Matches(text, "[A-Za-z0-9@._:-]+")
+            .Select(match => match.Value.Trim().ToLowerInvariant())
+            .Where(term => !string.IsNullOrWhiteSpace(term))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static string BuildSearchableText(ProfileDocument profile)
+        => string.Join(' ', BuildSearchSegments(profile)).ToLowerInvariant();
+
+    private static IEnumerable<string> BuildSearchSegments(ProfileDocument profile)
+    {
+        yield return profile.ProfileCard;
+        yield return profile.Synopsis;
+
+        foreach (var identity in profile.Identities)
+        {
+            yield return identity.Type;
+            yield return identity.Value;
+            yield return identity.Source;
+        }
+
+        foreach (var trait in profile.Traits)
+        {
+            yield return trait.Name;
+            yield return trait.Value;
+        }
+    }
+
+    private static IReadOnlyCollection<string> GetMatchedTerms(IReadOnlyCollection<string> queryTerms, ProfileDocument profile)
+    {
+        if (queryTerms.Count == 0)
+        {
+            return [];
+        }
+
+        var searchableText = BuildSearchableText(profile);
+        return queryTerms
+            .Where(term => searchableText.Contains(term, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+    }
+
+    private static RankedProfileCandidate CreateRankedProfileCandidate(IReadOnlyCollection<string> queryTerms, ProfileDocument profile, double similarity)
+    {
+        var matchedTerms = GetMatchedTerms(queryTerms, profile);
+        return new RankedProfileCandidate(
+            profile,
+            similarity,
+            matchedTerms,
+            GetSharedIdentities(queryTerms, profile),
+            GetSharedTraits(queryTerms, profile));
+    }
+
+    private static IReadOnlyCollection<IdentityDto> GetSharedIdentities(IReadOnlyCollection<string> queryTerms, ProfileDocument profile)
+        => profile.Identities
+            .Where(identity => MatchesAnyTerm(queryTerms, identity.Type, identity.Value, identity.Source))
+            .Select(identity => new IdentityDto(identity.Type, identity.Value, identity.Source))
+            .ToArray();
+
+    private static IReadOnlyCollection<TraitDto> GetSharedTraits(IReadOnlyCollection<string> queryTerms, ProfileDocument profile)
+        => profile.Traits
+            .Where(trait => MatchesAnyTerm(queryTerms, trait.Name, trait.Value))
+            .Select(trait => new TraitDto(trait.Name, trait.Value, trait.Confidence))
+            .ToArray();
+
+    private static bool MatchesAnyTerm(IReadOnlyCollection<string> queryTerms, params string[] values)
+    {
+        if (queryTerms.Count == 0)
+        {
+            return false;
+        }
+
+        var searchableText = string.Join(' ', values).ToLowerInvariant();
+        return queryTerms.Any(term => searchableText.Contains(term, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static double CalculateCosineSimilarity(IReadOnlyList<float> left, IReadOnlyCollection<float> right)
+    {
+        var rightVector = right as IReadOnlyList<float> ?? right.ToArray();
+        var dimensions = Math.Min(left.Count, rightVector.Count);
+        if (dimensions == 0)
+        {
+            return 0d;
+        }
+
+        double dot = 0d;
+        double leftMagnitude = 0d;
+        double rightMagnitude = 0d;
+
+        for (var index = 0; index < dimensions; index++)
+        {
+            dot += left[index] * rightVector[index];
+            leftMagnitude += left[index] * left[index];
+            rightMagnitude += rightVector[index] * rightVector[index];
+        }
+
+        if (leftMagnitude == 0d || rightMagnitude == 0d)
+        {
+            return 0d;
+        }
+
+        return dot / (Math.Sqrt(leftMagnitude) * Math.Sqrt(rightMagnitude));
+    }
+
+    private static double ComputeMagnitude(IReadOnlyList<float> vector)
+    {
+        double magnitude = 0d;
+        for (var index = 0; index < vector.Count; index++)
+        {
+            magnitude += vector[index] * vector[index];
+        }
+
+        return Math.Sqrt(magnitude);
+    }
 
     private static bool MatchesTrigger(ProfileDocument profile, TriggerDefinitionDocument trigger)
         => trigger.Conditions.All(condition => condition.Operator switch
@@ -552,6 +795,23 @@ public sealed class CipMvpService(ICipRuntimeStore store) : ICipMvpService, IPro
         }
     }
 
+    private static void ValidateSearchRequest(ProfileSearchRequest request)
+    {
+        ValidateTenantId(request.TenantId);
+        ValidateRequired(request.QueryText, nameof(request.QueryText));
+
+        if (request.Limit is <= 0)
+        {
+            throw new ArgumentException("Limit must be greater than zero.");
+        }
+    }
+
+    private static int ResolveSearchLimit(int? limit)
+    {
+        var resolvedLimit = limit ?? DefaultProfileSearchLimit;
+        return Math.Min(resolvedLimit, MaxProfileSearchLimit);
+    }
+
     private static void ValidateReviewRequest(string tenantId, string reviewedBy, string changeSetId)
     {
         ValidateTenantId(tenantId);
@@ -569,4 +829,11 @@ public sealed class CipMvpService(ICipRuntimeStore store) : ICipMvpService, IPro
             throw new ArgumentException($"{parameterName} is required.");
         }
     }
+
+    private sealed record RankedProfileCandidate(
+        ProfileDocument Profile,
+        double Similarity,
+        IReadOnlyCollection<string> MatchedTerms,
+        IReadOnlyCollection<IdentityDto> SharedIdentities,
+        IReadOnlyCollection<TraitDto> SharedTraits);
 }

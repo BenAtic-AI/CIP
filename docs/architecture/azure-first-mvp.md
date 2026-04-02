@@ -143,13 +143,15 @@ Use the following Cosmos containers:
 | Container | Partition key | Purpose | Notes |
 |---|---|---|---|
 | `events` | `/tenantId` | append-only inbound events | idempotent insert using `id = eventId` |
-| `operational` | `/tenantId` | profiles, changesets, approvals, triggers, runs, tenant config | single container keeps transactional batch viable across related docs |
+| `operational` | `/tenantId` | profiles, changesets, approvals, triggers, runs, tenant config | original MVP single-container shape |
 | `leases` | `/id` | change feed leases | worker-owned |
 
 Use Blob containers:
 
 - `artifacts-raw` for raw evidence payloads/attachments
 - `artifacts-rendered` for long markdown/history exports
+
+Current source-controlled target for step 1 rollout is a separate `operational-vectors` container: a DiskANN-ready Cosmos container with vector search capability enabled for profile synopsis vectors. That keeps the legacy `operational` container unchanged in already-deployed environments until they are migrated or redeployed.
 
 ### Why a single `operational` container is recommended for MVP
 
@@ -492,6 +494,8 @@ Dependencies: Phase 1, Phase 2 for approval workflow
 
 **Outcome**: vector-assisted identity resolution is working with human approval.
 
+Status note: this phase is source-complete in code and rollout-pending for existing environments. The current source-controlled target stores profile synopsis vectors on profile documents, supports live Azure AI embeddings with deterministic fallback, exposes `POST /api/profiles/search`, and targets the DiskANN-ready `operational-vectors` container with Cosmos vector search capability. Remaining rollout work for existing environments is operational: migrate or redeploy to the new container shape, re-embed existing profiles into that container, and then enable the native runtime path there. Evidence chunk embeddings and merge suggestion workflows still remain follow-on work.
+
 ### Phase 4 - Trigger engine v1
 
 Dependencies: Phase 1
@@ -582,6 +586,28 @@ Why this slice first:
 - Is single-region hosting acceptable for the first production release?
 - What are the first inbound event sources to support?
 - Are outbound trigger actions required in MVP, or is storing run results sufficient?
+
+## Future AI slices
+
+These are planned follow-on implementation slices and are not live in the MVP described here:
+
+- AI-generated profile summary / profile card refresh
+- ChangeSet explanation generation grounded in evidence
+- trigger recommendation suggestions
+- identity merge suggestions with confidence and evidence
+- artifact drafting for long-form operator-facing content
+
+## Next steps from the original product guide
+
+Note: step 1 is source-complete in source control and rollout-pending for existing environments. The target state is the vector-enabled `operational-vectors` Cosmos container with native vector search capability; existing environments still need container migration or redeployment plus profile re-embedding before they match that target. Evidence chunk embeddings and merge suggestion workflows are not live yet.
+
+1. implement embeddings + vector-assisted identity resolution over profile synopsis/evidence
+2. generate AI-backed profile cards stored in Cosmos with Blob fallback for oversized content
+3. generate evidence-backed ChangeSets from worker enrichment flows
+4. add approval-gated merge/suppress/delete workflows with lineage and ETag concurrency
+5. extend triggers from manual definitions to scored actions and result history
+6. add artifact upload/reference flow and Blob-backed large evidence handling
+7. add GDPR/audit/retention workflows for AI-derived and source-derived customer data
 
 ## Recommendation summary
 

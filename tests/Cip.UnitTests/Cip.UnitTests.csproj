@@ -19,5 +19,6 @@
     <ProjectReference Include="..\..\src\backend\Cip.Application\Cip.Application.csproj" />
     <ProjectReference Include="..\..\src\backend\Cip.Contracts\Cip.Contracts.csproj" />
     <ProjectReference Include="..\..\src\backend\Cip.Infrastructure\Cip.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\backend\Integrations.AzureAi\Integrations.AzureAi.csproj" />
   </ItemGroup>
 </Project>

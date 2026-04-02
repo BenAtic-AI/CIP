@@ -25,6 +25,9 @@ The templates are intended to provision the main MVP hosting shape, including:
 - runtime environment values for Cosmos, Storage, environment name, and Azure AI settings
 - RBAC assignments so apps can pull images and access Azure dependencies without checked-in secrets
 - Azure AI Foundry hub/project resources in source-controlled Bicep
+- a new vector-enabled `operational-vectors` Cosmos container for step 1 completion instead of mutating the legacy `operational` container
+
+Applying that container change to an existing environment is a rollout task, not an in-place assumption: migrate or redeploy the environment to the new container shape before expecting native vector search there.
 
 The example parameters still default to placeholder images, so a real deployment still depends on publishing backend images first.
 

@@ -10,6 +10,8 @@ The repository is intended to be public-facing and secretless: checked-in config
 ## Status
 
 - Active MVP codebase with a working Azure deployment baseline
+- Step-1 MVP slice is source-complete: profile-synopsis embeddings, the live Azure AI embeddings path with deterministic fallback, Cosmos-native vector search capability, and `POST /api/profiles/search` are in source
+- Existing environments still need migration or redeployment to the vector-enabled Cosmos container before that native vector path is fully rolled out there
 - Live dev now has Entra auth enabled for the API and frontend
 - API health stays anonymous in dev, while protected endpoints return `401 Unauthorized` without a bearer token
 - Repo-tracked defaults still keep Entra feature flags off until environment variables are supplied

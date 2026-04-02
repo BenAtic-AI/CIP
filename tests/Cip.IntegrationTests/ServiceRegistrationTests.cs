@@ -1,6 +1,7 @@
 using Cip.Application.Features.CipMvp;
 using Cip.Application.Features.Health;
 using Cip.Infrastructure.Persistence;
+using Integrations.AzureAi;
 using Integrations.AzureAi.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,11 +27,33 @@ public sealed class ServiceRegistrationTests
 
         var healthService = provider.GetService<IApplicationHealthService>();
         var cipMvpService = provider.GetService<ICipMvpService>();
+        var profileTextEmbeddingService = provider.GetService<IProfileTextEmbeddingService>();
         var processingStatusService = provider.GetService<IProcessingStatusService>();
 
         Assert.NotNull(healthService);
         Assert.NotNull(cipMvpService);
+        Assert.NotNull(profileTextEmbeddingService);
         Assert.NotNull(processingStatusService);
+    }
+
+    [Fact]
+    public void Infrastructure_RegistersAdaptiveEmbeddingService_WithDeterministicFallback()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddCipApplication();
+        services.AddCipInfrastructure(configuration);
+
+        using var provider = services.BuildServiceProvider();
+
+        var embeddingService = provider.GetRequiredService<IProfileTextEmbeddingService>();
+        var fallbackService = provider.GetRequiredService<DeterministicProfileTextEmbeddingService>();
+
+        Assert.IsType<AdaptiveProfileTextEmbeddingService>(embeddingService);
+        Assert.NotNull(fallbackService);
     }
 
     [Fact]
@@ -73,6 +96,7 @@ public sealed class ServiceRegistrationTests
 
         Assert.Equal("https://contoso.openai.azure.com/", options.Endpoint);
         Assert.Equal("embeddings-deployment", options.EmbeddingsDeployment);
+        Assert.Equal(128, options.EmbeddingsDimensions);
         Assert.Equal("chat-deployment", options.ChatDeployment);
     }
 

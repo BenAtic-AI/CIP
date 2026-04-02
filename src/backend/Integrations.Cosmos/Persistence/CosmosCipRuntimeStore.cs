@@ -4,10 +4,12 @@ using Cip.Domain.Documents;
 using Integrations.Cosmos.Configuration;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Options;
+using System.Net;
+using System.Text.Json.Serialization;
 
 namespace Integrations.Cosmos.Persistence;
 
-public sealed class CosmosCipRuntimeStore : ICipRuntimeStore
+public sealed class CosmosCipRuntimeStore : ICipRuntimeStore, IProfileVectorSearchRuntimeStore
 {
     private const string EventDocumentType = "event";
     private const string ProfileDocumentType = "profile";
@@ -36,6 +38,55 @@ public sealed class CosmosCipRuntimeStore : ICipRuntimeStore
 
     public Task<ProfileDocument?> GetProfileAsync(string tenantId, string profileId, CancellationToken cancellationToken)
         => ReadAsync<ProfileDocument>(_operationalContainer, BuildStoredId(ProfileDocumentType, profileId), tenantId, cancellationToken);
+
+    public async Task<IReadOnlyCollection<ProfileVectorSearchMatch>> SearchProfilesBySynopsisVectorAsync(
+        string tenantId,
+        IReadOnlyCollection<float> queryVector,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (queryVector.Count == 0 || limit <= 0)
+        {
+            return [];
+        }
+
+        const string vectorDistanceExpression = "VectorDistance(c.payload.synopsisVector, @queryVector, false, @distanceOptions)";
+
+        try
+        {
+            var query = new QueryDefinition(
+                $"SELECT TOP {limit} VALUE {{ \"profile\": c.payload, \"similarityScore\": 1 - {vectorDistanceExpression} }} "
+                + $"FROM c WHERE c.tenantId = @tenantId AND c.documentType = @documentType AND IS_ARRAY(c.payload.synopsisVector) "
+                + $"ORDER BY {vectorDistanceExpression}")
+                .WithParameter("@tenantId", tenantId)
+                .WithParameter("@documentType", ProfileDocumentType)
+                .WithParameter("@queryVector", queryVector.ToArray())
+                .WithParameter("@distanceOptions", new { distanceFunction = "cosine", dataType = "float32" });
+
+            var iterator = _operationalContainer.GetItemQueryIterator<ProfileVectorSearchItem>(
+                query,
+                requestOptions: new QueryRequestOptions
+                {
+                    PartitionKey = new PartitionKey(tenantId),
+                    MaxItemCount = limit
+                });
+
+            var results = new List<ProfileVectorSearchMatch>(limit);
+            while (iterator.HasMoreResults && results.Count < limit)
+            {
+                var response = await iterator.ReadNextAsync(cancellationToken);
+                results.AddRange(response
+                    .Where(item => item.Profile is not null)
+                    .Select(item => new ProfileVectorSearchMatch(item.Profile, item.SimilarityScore)));
+            }
+
+            return results;
+        }
+        catch (CosmosException exception) when (exception.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.NotImplemented)
+        {
+            throw new ProfileVectorSearchUnavailableException("Cosmos native vector search is unavailable for the configured runtime store.", exception);
+        }
+    }
 
     public async Task<ProfileDocument?> FindProfileByIdentityAsync(string tenantId, IReadOnlyCollection<ProfileIdentity> identities, CancellationToken cancellationToken)
     {
@@ -202,6 +253,10 @@ public sealed class CosmosCipRuntimeStore : ICipRuntimeStore
         => new(BuildStoredId(documentType, documentId), tenantId, documentType, payload);
 
     private static string BuildStoredId(string documentType, string documentId) => $"{documentType}::{documentId}";
+
+    private sealed record ProfileVectorSearchItem(
+        [property: JsonPropertyName("profile")] ProfileDocument Profile,
+        [property: JsonPropertyName("similarityScore")] double SimilarityScore);
 
     private sealed record CosmosStoredDocument<TDocument>(string Id, string TenantId, string DocumentType, TDocument Payload);
 }

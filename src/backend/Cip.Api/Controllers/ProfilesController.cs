@@ -1,4 +1,5 @@
 using Cip.Application.Features.CipMvp;
+using Cip.Contracts.Profiles;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Cip.Api.Controllers;
@@ -28,6 +29,20 @@ public sealed class ProfilesController(ICipMvpService cipMvpService) : Controlle
         {
             var response = await cipMvpService.GetProfileAsync(tenantId, profileId, cancellationToken);
             return response is null ? NotFound() : Ok(response);
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(new ProblemDetails { Title = exception.Message });
+        }
+    }
+
+    [HttpPost("search")]
+    public async Task<IActionResult> Search([FromBody] ProfileSearchRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await cipMvpService.SearchProfilesAsync(request, cancellationToken);
+            return Ok(response);
         }
         catch (ArgumentException exception)
         {

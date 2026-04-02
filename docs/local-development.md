@@ -24,6 +24,8 @@ dotnet run --project src/backend/Cip.Worker
 
 For day-to-day development, `dotnet run` is still the fastest loop. The repo also includes Dockerfiles for both backend services so the same projects can be built into Azure-ready images when you are preparing a deployment.
 
+Current vector-assisted search is exposed at `POST /api/profiles/search`. It uses stored profile synopsis vectors, with app-side ranking unless the Cosmos runtime and native vector search path are available.
+
 Optional local image builds from the repo root:
 
 ```powershell
@@ -43,6 +45,10 @@ The repo includes configuration sections for:
 - Entra ID
 
 No live Azure credentials or fixed environment IDs are checked in.
+
+Deterministic fallback embeddings remain the default local behavior, so profile search and identity-resolution flows still work without external AI access.
+
+Set `AzureResources:AI:UseLiveEmbeddings=true` to activate live Azure AI embeddings when the endpoint and embeddings deployment are configured.
 
 ## Auth baseline
 

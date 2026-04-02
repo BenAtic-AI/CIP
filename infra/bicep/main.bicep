@@ -24,6 +24,15 @@ param aiEmbeddingsDeployment string = 'text-embedding-3-large'
 @description('Azure AI chat deployment name exposed to the runtime.')
 param aiChatDeployment string = 'gpt-4.1-mini'
 
+@description('Cosmos DB operational container name exposed to the app runtime.')
+param cosmosOperationalContainerName string = 'operational-vectors'
+
+@description('Document path that stores the operational synopsis embedding vector.')
+param operationalVectorPath string = '/payload/synopsisVector'
+
+@description('Embedding dimensions for the operational synopsis vector.')
+param operationalVectorDimensions int = 128
+
 @description('Feature flag for API Microsoft Entra authentication. Keep false to preserve the current unauthenticated baseline.')
 param entraAuthEnabled bool = false
 
@@ -54,6 +63,9 @@ module dataServices './modules/data-services.bicep' = {
     environmentName: environmentName
     location: location
     namePrefix: namePrefix
+    cosmosOperationalContainerName: cosmosOperationalContainerName
+    operationalVectorPath: operationalVectorPath
+    operationalVectorDimensions: operationalVectorDimensions
     tags: tags
   }
 }
@@ -77,6 +89,7 @@ module appPlatform './modules/app-platform.bicep' = {
     renderedArtifactsContainerName: dataServices.outputs.renderedArtifactsContainerName
     aiEndpoint: dataServices.outputs.aiEndpoint
     aiEmbeddingsDeployment: aiEmbeddingsDeployment
+    aiEmbeddingsDimensions: operationalVectorDimensions
     aiChatDeployment: aiChatDeployment
     entraAuthEnabled: entraAuthEnabled
     entraAuthority: entraAuthority
@@ -132,6 +145,7 @@ output apiImageRepositoryPath string = appPlatform.outputs.apiImageRepositoryPat
 output workerImageRepositoryPath string = appPlatform.outputs.workerImageRepositoryPath
 output cosmosAccountName string = dataServices.outputs.cosmosAccountName
 output cosmosAccountEndpoint string = dataServices.outputs.cosmosAccountEndpoint
+output cosmosOperationalContainerName string = dataServices.outputs.cosmosOperationalContainerName
 output storageAccountName string = dataServices.outputs.storageAccountName
 output keyVaultUri string = dataServices.outputs.keyVaultUri
 output keyVaultName string = dataServices.outputs.keyVaultName
