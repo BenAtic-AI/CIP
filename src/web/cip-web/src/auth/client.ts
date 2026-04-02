@@ -10,6 +10,10 @@ export const msalInstance = msalConfiguration ? new PublicClientApplication(msal
 
 let initializationPromise: Promise<void> | null = null
 
+function getSignInScopes() {
+  return [...new Set([...entraAuth.loginScopes, ...entraAuth.apiScopes])]
+}
+
 function setActiveAccount(result: AuthenticationResult | null) {
   if (result?.account && msalInstance) {
     msalInstance.setActiveAccount(result.account)
@@ -50,7 +54,7 @@ export async function loginWithPopup() {
   }
 
   await initializeAuthClient()
-  const result = await msalInstance.loginPopup({ scopes: entraAuth.loginScopes })
+  const result = await msalInstance.loginPopup({ scopes: getSignInScopes() })
   setActiveAccount(result)
   return result.account ?? null
 }
@@ -89,7 +93,13 @@ export async function acquireAccessToken() {
     return result.accessToken || null
   } catch (error: unknown) {
     if (error instanceof InteractionRequiredAuthError) {
-      return null
+      const result = await msalInstance.acquireTokenPopup({
+        account,
+        scopes: entraAuth.apiScopes,
+      })
+
+      setActiveAccount(result)
+      return result.accessToken || null
     }
 
     throw error
