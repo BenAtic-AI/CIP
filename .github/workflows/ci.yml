@@ -2,29 +2,11 @@ name: CI
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/ci.yml'
-      - 'CIP.slnx'
-      - 'Directory.Build.props'
-      - 'Directory.Packages.props'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'src/backend/**'
-      - 'src/web/**'
-      - 'tests/**'
+    branches:
+      - main
   push:
     branches:
       - main
-    paths:
-      - '.github/workflows/ci.yml'
-      - 'CIP.slnx'
-      - 'Directory.Build.props'
-      - 'Directory.Packages.props'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'src/backend/**'
-      - 'src/web/**'
-      - 'tests/**'
   workflow_dispatch:
 
 permissions:
@@ -73,3 +55,13 @@ jobs:
 
       - name: Build frontend
         run: npm run build:web
+
+  infra:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Bicep
+        run: az bicep build --file infra/bicep/main.bicep
