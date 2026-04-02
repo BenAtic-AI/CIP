@@ -26,6 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   AZURE_ENVIRONMENT_NAME: dev
   BICEP_TEMPLATE_PATH: infra/bicep/main.bicep
   BICEP_PARAMETERS_PATH: infra/bicep/main.parameters.example.json
@@ -62,7 +63,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Validate required GitHub variables
         shell: bash
@@ -88,7 +89,7 @@ jobs:
           fi
 
       - name: Azure login with OIDC
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
