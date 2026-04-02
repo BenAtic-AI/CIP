@@ -172,6 +172,14 @@ function networkFailureMessage() {
   return `Unable to reach ${apiTarget}. If the backend is running on another origin, make sure CORS and preflight requests are allowed for this frontend.${authNote}`
 }
 
+function authFailureMessage(error: unknown) {
+  if (error instanceof Error && error.message.trim()) {
+    return `Unable to acquire an API access token. ${error.message}`
+  }
+
+  return 'Unable to acquire an API access token. Sign in again and confirm API access.'
+}
+
 async function buildHeaders(options: RequestOptions) {
   const headers = new Headers()
 
@@ -180,7 +188,10 @@ async function buildHeaders(options: RequestOptions) {
   }
 
   if (entraAuth.ready) {
-    const accessToken = await acquireAccessToken()
+    const accessToken = await acquireAccessToken().catch((error: unknown) => {
+      throw new ApiError(authFailureMessage(error), 401)
+    })
+
     if (accessToken) {
       headers.set('Authorization', `Bearer ${accessToken}`)
     }
