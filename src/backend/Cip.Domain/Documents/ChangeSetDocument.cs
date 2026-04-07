@@ -11,6 +11,8 @@ public sealed record ChangeSetDocument(
     IReadOnlyCollection<ProfileIdentity> ProposedIdentities,
     IReadOnlyCollection<ProfileTrait> ProposedTraits,
     IReadOnlyCollection<string> EvidenceReferences,
+    string Explanation,
+    IReadOnlyCollection<ChangeSetEvidenceItem> EvidenceItems,
     DateTimeOffset ProposedAt,
     DateTimeOffset? ReviewedAt,
     string? ReviewedBy,

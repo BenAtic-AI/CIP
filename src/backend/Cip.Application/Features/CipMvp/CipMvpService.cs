@@ -5,6 +5,7 @@ using Cip.Contracts.Profiles;
 using Cip.Contracts.Shared;
 using Cip.Contracts.Triggers;
 using Cip.Domain.Documents;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Cip.Application.Features.CipMvp;
@@ -29,7 +30,10 @@ public interface IProcessingStatusService
     Task<ProcessingStatusSnapshot> GetStatusAsync(CancellationToken cancellationToken);
 }
 
-public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingService profileTextEmbeddingService) : ICipMvpService, IProcessingStatusService
+public sealed class CipMvpService(
+    ICipRuntimeStore store,
+    IProfileTextEmbeddingService profileTextEmbeddingService,
+    IProfileCardGenerationService profileCardGenerationService) : ICipMvpService, IProcessingStatusService
 {
     private const int DefaultProfileSearchLimit = 5;
     private const int MaxProfileSearchLimit = 25;
@@ -61,7 +65,7 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
             var traits = request.Traits.Select(MapTrait).ToArray();
 
             var existingProfile = await store.FindProfileByIdentityAsync(request.TenantId, identities, cancellationToken);
-            var profile = existingProfile ?? CreateProfileShell(request.TenantId, request.EventType, identities, receivedAt);
+            var profile = existingProfile ?? CreateProfileShell(request.TenantId, request.EventType, receivedAt);
             var proposedIdentities = identities
                 .Where(identity => !profile.Identities.Any(existing => IdentityMatches(existing, identity)))
                 .ToArray();
@@ -71,15 +75,25 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
                 .ToArray();
 
             var changeSetId = $"cs_{Guid.NewGuid():N}";
-            var operations = BuildOperations(proposedIdentities, proposedTraits);
+            var operations = BuildOperations(request.Source, proposedIdentities, proposedTraits);
             string[] evidenceReferences = [request.EventId, request.Source];
+            var explanation = BuildExplanation(
+                request.EventId,
+                request.EventType,
+                request.Source,
+                request.OccurredAt,
+                profile.ProfileId,
+                existingProfile is null,
+                proposedIdentities,
+                proposedTraits);
+            var evidenceItems = BuildEvidenceItems(request, proposedIdentities, proposedTraits);
             var effectiveProfile = profile with
             {
                 Status = Constants.Profiles.PendingReview,
                 UpdatedAt = receivedAt,
                 Synopsis = BuildPendingSynopsis(request.EventType, request.Source, profile.Identities, profile.Traits, proposedIdentities, proposedTraits)
             };
-            effectiveProfile = await PopulateSynopsisVectorAsync(effectiveProfile, cancellationToken);
+            effectiveProfile = await PopulateProfileDerivedFieldsAsync(effectiveProfile, cancellationToken);
 
             var changeSet = new ChangeSetDocument(
                 Id: changeSetId,
@@ -92,6 +106,8 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
                 ProposedIdentities: proposedIdentities,
                 ProposedTraits: proposedTraits,
                 EvidenceReferences: evidenceReferences,
+                Explanation: explanation,
+                EvidenceItems: evidenceItems,
                 ProposedAt: receivedAt,
                 ReviewedAt: null,
                 ReviewedBy: null,
@@ -220,7 +236,6 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
             var profile = await store.GetProfileAsync(tenantId, changeSet.TargetProfileId, cancellationToken)
                 ?? throw new InvalidOperationException($"Profile '{changeSet.TargetProfileId}' was not found.");
 
-            var updatedProfile = await PopulateSynopsisVectorAsync(ApplyApprovedChanges(profile, changeSet), cancellationToken);
             var now = DateTimeOffset.UtcNow;
 
             var reviewedChangeSet = changeSet with
@@ -231,7 +246,6 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
                 ReviewComment = comment?.Trim()
             };
 
-            await store.UpdateProfileAsync(updatedProfile with { UpdatedAt = now }, cancellationToken);
             await store.UpdateChangeSetAsync(reviewedChangeSet, cancellationToken);
 
             var sourceEvent = await store.GetEventAsync(tenantId, changeSet.SourceEventId, cancellationToken);
@@ -241,10 +255,15 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
             }
 
             var pending = await store.ListPendingChangeSetsForProfileAsync(tenantId, profile.ProfileId, cancellationToken);
-            if (pending.Count == 0)
-            {
-                await store.UpdateProfileAsync(updatedProfile with { Status = Constants.Profiles.Ready, UpdatedAt = now }, cancellationToken);
-            }
+            var updatedProfile = await PopulateProfileDerivedFieldsAsync(
+                ApplyApprovedChanges(profile, changeSet) with
+                {
+                    Status = pending.Count == 0 ? Constants.Profiles.Ready : Constants.Profiles.PendingReview,
+                    UpdatedAt = now
+                },
+                cancellationToken);
+
+            await store.UpdateProfileAsync(updatedProfile, cancellationToken);
 
             var reloaded = await store.GetChangeSetAsync(tenantId, changeSetId, cancellationToken);
             return reloaded is null ? null : MapChangeSet(reloaded);
@@ -296,7 +315,11 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
                     ? Constants.Profiles.Ready
                     : Constants.Profiles.PendingReview;
 
-                await store.UpdateProfileAsync(profile with { Status = status, UpdatedAt = now }, cancellationToken);
+                var updatedProfile = await PopulateProfileDerivedFieldsAsync(
+                    profile with { Status = status, UpdatedAt = now },
+                    cancellationToken);
+
+                await store.UpdateProfileAsync(updatedProfile, cancellationToken);
             }
 
             return MapChangeSet(reviewedChangeSet);
@@ -371,13 +394,9 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
     public Task<ProcessingStatusSnapshot> GetStatusAsync(CancellationToken cancellationToken)
         => store.GetProcessingStatusAsync(cancellationToken);
 
-    private static ProfileDocument CreateProfileShell(string tenantId, string eventType, IReadOnlyCollection<ProfileIdentity> identities, DateTimeOffset now)
+    private static ProfileDocument CreateProfileShell(string tenantId, string eventType, DateTimeOffset now)
     {
         var profileId = $"pro_{Guid.NewGuid():N}";
-        var profileCard = identities.FirstOrDefault() is { } firstIdentity
-            ? $"{firstIdentity.Type}:{firstIdentity.Value}"
-            : $"Shell created from {eventType}";
-
         return new ProfileDocument(
             Id: profileId,
             TenantId: tenantId,
@@ -386,7 +405,7 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
             Status: Constants.Profiles.PendingReview,
             Identities: [],
             Traits: [],
-            ProfileCard: profileCard,
+            ProfileCard: string.Empty,
             Synopsis: $"Shell created from {eventType} event pending approval.",
             SynopsisVector: null,
             CreatedAt: now,
@@ -431,6 +450,82 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
         }
 
         return operations.ToArray();
+    }
+
+    private static string[] BuildOperations(string source, IReadOnlyCollection<ProfileIdentity> identities, IReadOnlyCollection<ProfileTrait> traits)
+    {
+        var operations = new List<string>(identities.Count + traits.Count);
+        operations.AddRange(identities.Select(identity => $"Upsert identity {identity.Type}:{identity.Value} from {source}"));
+        operations.AddRange(traits.Select(trait => $"Upsert trait {trait.Name}={trait.Value} from {source} (confidence {FormatConfidence(trait.Confidence)})"));
+
+        if (operations.Count == 0)
+        {
+            operations.Add($"No-op review required for {source} event evidence");
+        }
+
+        return operations.ToArray();
+    }
+
+    private static string BuildExplanation(
+        string eventId,
+        string eventType,
+        string source,
+        DateTimeOffset occurredAt,
+        string targetProfileId,
+        bool createsProfile,
+        IReadOnlyCollection<ProfileIdentity> proposedIdentities,
+        IReadOnlyCollection<ProfileTrait> proposedTraits)
+    {
+        var profileAction = createsProfile ? "create" : "update";
+        var context = $"Event {eventId} ({eventType}) from {source} at {occurredAt:O}";
+
+        if (proposedIdentities.Count == 0 && proposedTraits.Count == 0)
+        {
+            return $"{context} was matched to profile {targetProfileId} for review, but it does not introduce any new identities or traits. Approval or rejection is still required to audit the event linkage.";
+        }
+
+        return $"{context} proposes a {profileAction} for profile {targetProfileId} by adding identities {FormatIdentitySummary(proposedIdentities)} and traits {FormatTraitSummary(proposedTraits)}. These changes are grounded in the source event payload and require review before profile materialization.";
+    }
+
+    private static ChangeSetEvidenceItem[] BuildEvidenceItems(
+        IngestEventRequest request,
+        IReadOnlyCollection<ProfileIdentity> proposedIdentities,
+        IReadOnlyCollection<ProfileTrait> proposedTraits)
+    {
+        var evidenceItems = new List<ChangeSetEvidenceItem>(1 + proposedIdentities.Count + proposedTraits.Count)
+        {
+            new(
+                Kind: "EventMetadata",
+                Reference: request.EventId,
+                Summary: $"Source event {request.EventId} ({request.EventType}) from {request.Source} occurred at {request.OccurredAt:O} and produced {proposedIdentities.Count} identity proposal(s) and {proposedTraits.Count} trait proposal(s).",
+                Confidence: 1m,
+                Source: request.Source,
+                EventId: request.EventId,
+                EventType: request.EventType,
+                OccurredAt: request.OccurredAt)
+        };
+
+        evidenceItems.AddRange(proposedIdentities.Select(identity => new ChangeSetEvidenceItem(
+            Kind: "IdentityObservation",
+            Reference: $"{request.EventId}#identity:{identity.Type}:{identity.Value}",
+            Summary: $"Observed identity {identity.Type}:{identity.Value} from source {identity.Source} in event {request.EventId} ({request.EventType}) at {request.OccurredAt:O}.",
+            Confidence: 1m,
+            Source: request.Source,
+            EventId: request.EventId,
+            EventType: request.EventType,
+            OccurredAt: request.OccurredAt)));
+
+        evidenceItems.AddRange(proposedTraits.Select(trait => new ChangeSetEvidenceItem(
+            Kind: "TraitObservation",
+            Reference: $"{request.EventId}#trait:{trait.Name}",
+            Summary: $"Observed trait {trait.Name}={trait.Value} with confidence {FormatConfidence(trait.Confidence)} in event {request.EventId} ({request.EventType}) at {request.OccurredAt:O}.",
+            Confidence: trait.Confidence,
+            Source: request.Source,
+            EventId: request.EventId,
+            EventType: request.EventType,
+            OccurredAt: request.OccurredAt)));
+
+        return evidenceItems.ToArray();
     }
 
     private static ProfileDocument ApplyApprovedChanges(ProfileDocument profile, ChangeSetDocument changeSet)
@@ -508,6 +603,13 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
         };
     }
 
+    private async Task<ProfileDocument> PopulateProfileDerivedFieldsAsync(ProfileDocument profile, CancellationToken cancellationToken)
+    {
+        var vectorizedProfile = await PopulateSynopsisVectorAsync(profile, cancellationToken);
+        var profileCard = await profileCardGenerationService.GenerateAsync(vectorizedProfile, cancellationToken);
+        return vectorizedProfile with { ProfileCard = profileCard };
+    }
+
     private async Task<IReadOnlyCollection<ProfileResponse>> MapProfilesAsync(string tenantId, IReadOnlyCollection<ProfileDocument> profiles, CancellationToken cancellationToken)
     {
         var results = new List<ProfileResponse>(profiles.Count);
@@ -547,6 +649,16 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
             changeSet.ProposedIdentities.Select(item => new IdentityDto(item.Type, item.Value, item.Source)).ToArray(),
             changeSet.ProposedTraits.Select(item => new TraitDto(item.Name, item.Value, item.Confidence)).ToArray(),
             changeSet.EvidenceReferences,
+            changeSet.Explanation,
+            changeSet.EvidenceItems.Select(item => new ChangeSetEvidenceItemResponse(
+                item.Kind,
+                item.Reference,
+                item.Summary,
+                item.Confidence,
+                item.Source,
+                item.EventId,
+                item.EventType,
+                item.OccurredAt)).ToArray(),
             changeSet.ProposedAt,
             changeSet.ReviewedAt,
             changeSet.ReviewedBy,
@@ -585,6 +697,9 @@ public sealed class CipMvpService(ICipRuntimeStore store, IProfileTextEmbeddingS
 
         return values.Length == 0 ? "none" : string.Join(", ", values);
     }
+
+    private static string FormatConfidence(decimal confidence)
+        => confidence.ToString("0.##", CultureInfo.InvariantCulture);
 
     private static IReadOnlyCollection<string> ExtractSearchTerms(string text)
         => Regex.Matches(text, "[A-Za-z0-9@._:-]+")

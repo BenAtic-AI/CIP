@@ -82,7 +82,7 @@ Use a **modular monolith** implemented as:
 - **Azure Cosmos DB NoSQL** as the canonical store
 - **Cosmos integrated vector search** for identity suggestions and profile targeting
 - **Azure Blob Storage** for large evidence/artifacts
-- **Azure AI** for embeddings and profile-card generation, with Azure OpenAI resources still valid at runtime
+- **Azure AI** for embeddings and optional live profile-card generation, with deterministic short-Markdown fallback in source and Azure OpenAI resources still valid at runtime
 - **Microsoft Entra ID** for operator authentication
 - **Azure Key Vault** for secrets/config references
 - **Application Insights + Log Analytics** for observability
@@ -591,19 +591,19 @@ Why this slice first:
 
 These are planned follow-on implementation slices and are not live in the MVP described here:
 
-- AI-generated profile summary / profile card refresh
-- ChangeSet explanation generation grounded in evidence
+- long-form artifact drafting for operator-facing content
+- AI-assisted ChangeSet explanations beyond the current deterministic rationale and structured evidence items
 - trigger recommendation suggestions
 - identity merge suggestions with confidence and evidence
-- artifact drafting for long-form operator-facing content
+- richer evidence-backed profile-card generation
 
 ## Next steps from the original product guide
 
-Note: step 1 is source-complete in source control and rollout-pending for existing environments. The target state is the vector-enabled `operational-vectors` Cosmos container with native vector search capability; existing environments still need container migration or redeployment plus profile re-embedding before they match that target. Evidence chunk embeddings and merge suggestion workflows are not live yet.
+Note: step 1 is source-complete in source control and rollout-pending for existing environments. The target state is the vector-enabled `operational-vectors` Cosmos container with native vector search capability; existing environments still need container migration or redeployment plus profile re-embedding before they match that target. Step 2 is also implemented in source and rollout-ready: short Markdown profile cards are stored on profile documents, deterministic fallback remains the default path, and live Azure AI chat generation is optional when configured. Step 3 is implemented in source: ChangeSets now carry deterministic explanation/rationale text plus structured evidence items, while legacy `evidenceRefs` remain for compatibility. AI-assisted explanations, richer evidence artifacts or Blob-backed evidence payloads, evidence chunk embeddings, and merge/suppress/delete workflows are not live yet.
 
 1. implement embeddings + vector-assisted identity resolution over profile synopsis/evidence
-2. generate AI-backed profile cards stored in Cosmos with Blob fallback for oversized content
-3. generate evidence-backed ChangeSets from worker enrichment flows
+2. roll out the source-complete short Markdown profile-card slice where needed; later phases still cover long-form artifacts, Blob-backed narrative history, and richer evidence-backed cards
+3. implemented in source: generate evidence-backed ChangeSets from worker enrichment flows with deterministic rationale and structured evidence items
 4. add approval-gated merge/suppress/delete workflows with lineage and ETag concurrency
 5. extend triggers from manual definitions to scored actions and result history
 6. add artifact upload/reference flow and Blob-backed large evidence handling

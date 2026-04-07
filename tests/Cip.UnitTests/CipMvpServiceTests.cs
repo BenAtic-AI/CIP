@@ -4,6 +4,7 @@ using Cip.Contracts.Events;
 using Cip.Contracts.Profiles;
 using Cip.Contracts.Shared;
 using Cip.Domain.Documents;
+using Integrations.AzureAi;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -24,7 +25,7 @@ public sealed class CipMvpServiceTests
 
         Assert.Equal(first, second);
         Assert.NotEqual(first, different);
-        Assert.True(first.Any(value => value != 0f));
+        Assert.Contains(first, value => value != 0f);
     }
 
     [Fact]
@@ -59,6 +60,121 @@ public sealed class CipMvpServiceTests
         Assert.Empty(profile!.Identities);
         Assert.Empty(profile.Traits);
         Assert.Equal(0, profile.PendingChangeSetCount);
+    }
+
+    [Fact]
+    public async Task IngestAndApproveChangeSet_GeneratesProfileCardsFromProfileContent()
+    {
+        using var provider = BuildServiceProvider();
+        var service = provider.GetRequiredService<ICipMvpService>();
+
+        var ingestion = await service.IngestEventAsync(
+            CreateEventRequest("tenant-cards", "event-cards", "Finance", "analyst@contoso.com"),
+            CancellationToken.None);
+
+        var pendingProfile = await service.GetProfileAsync("tenant-cards", ingestion.ProfileId, CancellationToken.None);
+
+        Assert.NotNull(pendingProfile);
+        Assert.Contains("### Profile summary", pendingProfile!.ProfileCard);
+        Assert.Contains("Pending review", pendingProfile.ProfileCard, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("none", pendingProfile.ProfileCard, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Shell created from PersonObserved", pendingProfile.ProfileCard, StringComparison.Ordinal);
+
+        await service.ApproveChangeSetAsync(
+            "tenant-cards",
+            ingestion.ChangeSetId,
+            "reviewer@contoso.com",
+            "approved",
+            CancellationToken.None);
+
+        var approvedProfile = await service.GetProfileAsync("tenant-cards", ingestion.ProfileId, CancellationToken.None);
+
+        Assert.NotNull(approvedProfile);
+        Assert.Contains("Ready", approvedProfile!.ProfileCard, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Email:analyst@contoso.com", approvedProfile.ProfileCard, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Department=Finance", approvedProfile.ProfileCard, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEqual(pendingProfile.ProfileCard, approvedProfile.ProfileCard);
+    }
+
+    [Fact]
+    public async Task IngestEvent_GeneratesDeterministicExplanationAndEvidence()
+    {
+        using var provider = BuildServiceProvider();
+        var service = provider.GetRequiredService<ICipMvpService>();
+        var occurredAt = new DateTimeOffset(2026, 4, 1, 12, 30, 0, TimeSpan.Zero);
+        var request = new IngestEventRequest(
+            "tenant-evidence",
+            "event-evidence",
+            "PersonObserved",
+            "unit-test",
+            occurredAt,
+            [new IdentityDto("Email", "evidence@contoso.com", "unit-test")],
+            [new TraitDto("Department", "Finance", 0.91m)]);
+
+        var ingestion = await service.IngestEventAsync(request, CancellationToken.None);
+        var changeSet = await service.GetChangeSetAsync(request.TenantId, ingestion.ChangeSetId, CancellationToken.None);
+
+        Assert.NotNull(changeSet);
+        Assert.Equal(request.EventId, changeSet!.SourceEventId);
+        Assert.Equal($"Event {request.EventId} ({request.EventType}) from {request.Source} at {request.OccurredAt:O} proposes a create for profile {ingestion.ProfileId} by adding identities Email:evidence@contoso.com and traits Department=Finance. These changes are grounded in the source event payload and require review before profile materialization.", changeSet.Explanation);
+        Assert.Equal([request.EventId, request.Source], changeSet.EvidenceReferences);
+        Assert.Equal(3, changeSet.EvidenceItems.Count);
+
+        var metadata = changeSet.EvidenceItems.First();
+        Assert.Equal("EventMetadata", metadata.Kind);
+        Assert.Equal(request.EventId, metadata.Reference);
+        Assert.Equal(request.Source, metadata.Source);
+        Assert.Equal(request.EventId, metadata.EventId);
+        Assert.Equal(request.EventType, metadata.EventType);
+        Assert.Equal(request.OccurredAt, metadata.OccurredAt);
+
+        Assert.Contains(changeSet.EvidenceItems, item =>
+            item.Kind == "IdentityObservation"
+            && item.Reference == "event-evidence#identity:Email:evidence@contoso.com"
+            && item.Confidence == 1m
+            && item.Source == request.Source);
+
+        Assert.Contains(changeSet.EvidenceItems, item =>
+            item.Kind == "TraitObservation"
+            && item.Reference == "event-evidence#trait:Department"
+            && item.Confidence == 0.91m
+            && item.Source == request.Source);
+    }
+
+    [Fact]
+    public async Task IngestEvent_WithNoNewChanges_GeneratesAuditExplanation()
+    {
+        using var provider = BuildServiceProvider();
+        var service = provider.GetRequiredService<ICipMvpService>();
+
+        var initialRequest = CreateEventRequest("tenant-noop", "event-noop-1", "Finance", "noop@contoso.com");
+        var initialIngestion = await service.IngestEventAsync(initialRequest, CancellationToken.None);
+
+        await service.ApproveChangeSetAsync(
+            initialRequest.TenantId,
+            initialIngestion.ChangeSetId,
+            "reviewer@contoso.com",
+            "approved",
+            CancellationToken.None);
+
+        var secondRequest = new IngestEventRequest(
+            initialRequest.TenantId,
+            "event-noop-2",
+            initialRequest.EventType,
+            initialRequest.Source,
+            new DateTimeOffset(2026, 4, 2, 8, 15, 0, TimeSpan.Zero),
+            initialRequest.Identities,
+            initialRequest.Traits,
+            initialRequest.SchemaVersion);
+
+        var secondIngestion = await service.IngestEventAsync(secondRequest, CancellationToken.None);
+        var changeSet = await service.GetChangeSetAsync(secondRequest.TenantId, secondIngestion.ChangeSetId, CancellationToken.None);
+
+        Assert.NotNull(changeSet);
+        Assert.Equal(["No-op review required for unit-test event evidence"], changeSet!.ProposedOperations);
+        Assert.Equal($"Event {secondRequest.EventId} ({secondRequest.EventType}) from {secondRequest.Source} at {secondRequest.OccurredAt:O} was matched to profile {secondIngestion.ProfileId} for review, but it does not introduce any new identities or traits. Approval or rejection is still required to audit the event linkage.", changeSet.Explanation);
+        Assert.Single(changeSet.EvidenceItems);
+        Assert.Equal("EventMetadata", changeSet.EvidenceItems.Single().Kind);
     }
 
     [Fact]
@@ -133,7 +249,7 @@ public sealed class CipMvpServiceTests
             UpdatedAt: DateTimeOffset.UtcNow);
 
         var store = new NativeVectorSearchStore(profile, 0.97d);
-        var service = new CipMvpService(store, new StubEmbeddingService([1f, 0f]));
+        var service = new CipMvpService(store, new StubEmbeddingService([1f, 0f]), new StubProfileCardGenerationService("### Profile summary\n- **Status:** Ready"));
 
         var response = await service.SearchProfilesAsync(
             new ProfileSearchRequest("tenant-native", "finance analyst", 3),
@@ -173,6 +289,12 @@ public sealed class CipMvpServiceTests
     {
         public Task<IReadOnlyCollection<float>> EmbedAsync(string text, CancellationToken cancellationToken)
             => Task.FromResult(vector);
+    }
+
+    private sealed class StubProfileCardGenerationService(string markdown) : IProfileCardGenerationService
+    {
+        public Task<string> GenerateAsync(ProfileDocument profile, CancellationToken cancellationToken)
+            => Task.FromResult(markdown);
     }
 
     private sealed class NativeVectorSearchStore(ProfileDocument profile, double similarityScore) : ICipRuntimeStore, IProfileVectorSearchRuntimeStore
