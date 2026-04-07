@@ -15,6 +15,7 @@ public static partial class Constants
         public const string Shell = "profile";
         public const string PendingReview = "PendingReview";
         public const string Ready = "Ready";
+        public const int ProfileCardMaxLength = 600;
     }
 
     public static class ChangeSets

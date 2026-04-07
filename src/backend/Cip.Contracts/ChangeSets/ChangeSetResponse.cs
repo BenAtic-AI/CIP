@@ -12,6 +12,8 @@ public sealed record ChangeSetResponse(
     IReadOnlyCollection<IdentityDto> ProposedIdentities,
     IReadOnlyCollection<TraitDto> ProposedTraits,
     IReadOnlyCollection<string> EvidenceReferences,
+    string Explanation,
+    IReadOnlyCollection<ChangeSetEvidenceItemResponse> EvidenceItems,
     DateTimeOffset ProposedAt,
     DateTimeOffset? ReviewedAt,
     string? ReviewedBy,

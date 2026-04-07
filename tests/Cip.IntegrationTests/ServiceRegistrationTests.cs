@@ -27,13 +27,35 @@ public sealed class ServiceRegistrationTests
 
         var healthService = provider.GetService<IApplicationHealthService>();
         var cipMvpService = provider.GetService<ICipMvpService>();
+        var profileCardGenerationService = provider.GetService<IProfileCardGenerationService>();
         var profileTextEmbeddingService = provider.GetService<IProfileTextEmbeddingService>();
         var processingStatusService = provider.GetService<IProcessingStatusService>();
 
         Assert.NotNull(healthService);
         Assert.NotNull(cipMvpService);
+        Assert.NotNull(profileCardGenerationService);
         Assert.NotNull(profileTextEmbeddingService);
         Assert.NotNull(processingStatusService);
+    }
+
+    [Fact]
+    public void Infrastructure_RegistersAdaptiveProfileCardService_WithDeterministicFallback()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddCipApplication();
+        services.AddCipInfrastructure(configuration);
+
+        using var provider = services.BuildServiceProvider();
+
+        var profileCardService = provider.GetRequiredService<IProfileCardGenerationService>();
+        var fallbackService = provider.GetRequiredService<DeterministicProfileCardGenerationService>();
+
+        Assert.IsType<AdaptiveProfileCardGenerationService>(profileCardService);
+        Assert.NotNull(fallbackService);
     }
 
     [Fact]
@@ -82,7 +104,8 @@ public sealed class ServiceRegistrationTests
             {
                 ["AzureResources:AI:Endpoint"] = "https://contoso.openai.azure.com/",
                 ["AzureResources:AI:EmbeddingsDeployment"] = "embeddings-deployment",
-                ["AzureResources:AI:ChatDeployment"] = "chat-deployment"
+                ["AzureResources:AI:ChatDeployment"] = "chat-deployment",
+                ["AzureResources:AI:UseLiveProfileCards"] = "true"
             })
             .Build();
 
@@ -98,6 +121,7 @@ public sealed class ServiceRegistrationTests
         Assert.Equal("embeddings-deployment", options.EmbeddingsDeployment);
         Assert.Equal(128, options.EmbeddingsDimensions);
         Assert.Equal("chat-deployment", options.ChatDeployment);
+        Assert.True(options.UseLiveProfileCards);
     }
 
     [Fact]

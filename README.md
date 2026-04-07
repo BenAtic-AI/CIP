@@ -11,6 +11,8 @@ The repository is intended to be public-facing and secretless: checked-in config
 
 - Active MVP codebase with a working Azure deployment baseline
 - Step-1 MVP slice is source-complete: profile-synopsis embeddings, the live Azure AI embeddings path with deterministic fallback, Cosmos-native vector search capability, and `POST /api/profiles/search` are in source
+- Step-2 profile-card slice is implemented in source: AI-backed profile cards/summaries use deterministic Markdown fallback by default, with optional live Azure AI chat generation when configured
+- Step-3 ChangeSet slice is implemented in source: worker flows now generate evidence-backed ChangeSets with deterministic explanation/rationale text plus structured evidence items, while existing `evidenceRefs` remain for compatibility
 - Existing environments still need migration or redeployment to the vector-enabled Cosmos container before that native vector path is fully rolled out there
 - Live dev now has Entra auth enabled for the API and frontend
 - API health stays anonymous in dev, while protected endpoints return `401 Unauthorized` without a bearer token

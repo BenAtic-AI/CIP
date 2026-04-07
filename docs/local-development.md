@@ -48,7 +48,15 @@ No live Azure credentials or fixed environment IDs are checked in.
 
 Deterministic fallback embeddings remain the default local behavior, so profile search and identity-resolution flows still work without external AI access.
 
+Local profile cards also work without Azure AI because the short Markdown fallback is built in.
+
+Evidence-backed ChangeSet generation also works locally without Azure AI. The current explanation and evidence output is deterministic and grounded in event metadata, resolved identities, and profile traits.
+
 Set `AzureResources:AI:UseLiveEmbeddings=true` to activate live Azure AI embeddings when the endpoint and embeddings deployment are configured.
+
+Live profile-card generation additionally requires `AzureResources:AI:UseLiveProfileCards=true`, `AzureResources:AI:Endpoint`, and `AzureResources:AI:ChatDeployment`.
+
+If you disable Azure AI services to save cost, profile-card generation falls back to the local deterministic behavior.
 
 ## Auth baseline
 

@@ -39,6 +39,16 @@ public sealed class CipMvpApiTests
         Assert.Equal(ingestion.ChangeSetId, changeSet.ChangeSetId);
         Assert.Single(changeSet.ProposedIdentities);
         Assert.Single(changeSet.ProposedTraits);
+
+        var detail = await client.GetFromJsonAsync<ChangeSetResponse>($"/api/change-sets/{ingestion.ChangeSetId}?tenantId={request.TenantId}");
+        Assert.NotNull(detail);
+        Assert.Equal(changeSet.ChangeSetId, detail!.ChangeSetId);
+        Assert.Contains(request.EventId, detail.Explanation, StringComparison.Ordinal);
+        Assert.Equal([request.EventId, request.Source], detail.EvidenceReferences);
+        Assert.Equal(3, detail.EvidenceItems.Count);
+        Assert.Contains(detail.EvidenceItems, item => item.Kind == "EventMetadata" && item.EventId == request.EventId && item.EventType == request.EventType);
+        Assert.Contains(detail.EvidenceItems, item => item.Kind == "IdentityObservation" && item.Source == request.Source);
+        Assert.Contains(detail.EvidenceItems, item => item.Kind == "TraitObservation" && item.Source == request.Source);
     }
 
     [Fact]
