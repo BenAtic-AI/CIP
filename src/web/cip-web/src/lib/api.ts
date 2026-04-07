@@ -54,6 +54,17 @@ export type ProfileResponse = {
   updatedAt: string
 }
 
+export type ChangeSetEvidenceItemResponse = {
+  kind: string
+  reference: string
+  summary: string
+  confidence?: number | null
+  source?: string | null
+  eventId?: string | null
+  eventType?: string | null
+  occurredAt?: string | null
+}
+
 export type ChangeSetResponse = {
   tenantId: string
   changeSetId: string
@@ -64,6 +75,8 @@ export type ChangeSetResponse = {
   proposedIdentities: IdentityDto[]
   proposedTraits: TraitDto[]
   evidenceReferences: string[]
+  explanation?: string | null
+  evidenceItems?: ChangeSetEvidenceItemResponse[] | null
   proposedAt: string
   reviewedAt: string | null
   reviewedBy: string | null

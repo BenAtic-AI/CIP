@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import {
   ApiError,
   approveChangeSet,
   createTrigger,
+  type ChangeSetEvidenceItemResponse,
   getChangeSet,
   getHealth,
   getProfile,
@@ -198,6 +200,14 @@ function isBlank(value: string) {
 
 function summarizePending(count: number) {
   return count === 1 ? '1 pending change set' : `${count} pending change sets`
+}
+
+function formatConfidence(value: number | null | undefined) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return null
+  }
+
+  return value.toString()
 }
 
 export default function App() {
@@ -875,8 +885,8 @@ export default function App() {
                         }`}
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-medium text-white">{profile.profileCard}</p>
+                          <div className="min-w-0 flex-1">
+                            <ProfileCardMarkdown content={profile.profileCard} variant="compact" />
                             <p className="mt-1 text-xs text-slate-400">{profile.profileId}</p>
                           </div>
                           <StatusPill value={profile.status} />
@@ -900,15 +910,15 @@ export default function App() {
                   <p className="text-sm text-slate-400">Select a profile to inspect details.</p>
                 )}
                 {profileDetailState.data && (
-                  <div className="space-y-5">
-                    <div>
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h3 className="text-lg font-semibold text-white">{profileDetailState.data.profileCard}</h3>
-                          <p className="mt-1 text-xs text-slate-400">{profileDetailState.data.profileId}</p>
+                    <div className="space-y-5">
+                      <div>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <ProfileCardMarkdown content={profileDetailState.data.profileCard} variant="detail" />
+                            <p className="mt-1 text-xs text-slate-400">{profileDetailState.data.profileId}</p>
+                          </div>
+                          <StatusPill value={profileDetailState.data.status} />
                         </div>
-                        <StatusPill value={profileDetailState.data.status} />
-                      </div>
                       <p className="mt-3 text-sm text-slate-300">{profileDetailState.data.synopsis}</p>
                     </div>
 
@@ -1039,6 +1049,13 @@ export default function App() {
                       </div>
                     </div>
 
+                    {changeSetDetailState.data.explanation && (
+                      <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                        <h4 className="text-sm font-semibold text-white">Rationale</h4>
+                        <p className="mt-2 text-sm leading-6 text-slate-300">{changeSetDetailState.data.explanation}</p>
+                      </div>
+                    )}
+
                     <DetailList title="Proposed operations" emptyMessage="No operations were generated.">
                       {changeSetDetailState.data.proposedOperations.map((operation) => (
                         <li key={operation} className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-300">
@@ -1068,6 +1085,12 @@ export default function App() {
                           <span className="mx-2 text-slate-500">•</span>
                           <span className="text-slate-400">confidence {trait.confidence}</span>
                         </li>
+                      ))}
+                    </DetailList>
+
+                    <DetailList title="Structured evidence" emptyMessage="No structured evidence supplied.">
+                      {changeSetDetailState.data.evidenceItems?.map((item, index) => (
+                        <EvidenceItemCard key={`${item.reference}-${item.kind}-${index}`} item={item} />
                       ))}
                     </DetailList>
 
@@ -1330,8 +1353,8 @@ export default function App() {
                                   onClick={() => setSelectedProfileId(profile.profileId)}
                                 >
                                   <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                      <p className="font-medium text-white">{profile.profileCard}</p>
+                                    <div className="min-w-0 flex-1">
+                                      <ProfileCardMarkdown content={profile.profileCard} variant="compact" />
                                       <p className="mt-1 text-xs text-slate-400">{profile.profileId}</p>
                                     </div>
                                     <StatusPill value={profile.status} />
@@ -1491,6 +1514,71 @@ function StatusPill({ value }: { value: string }) {
       : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
 
   return <span className={`rounded-full border px-3 py-1 text-xs font-medium ${tone}`}>{value}</span>
+}
+
+function ProfileCardMarkdown({
+  content,
+  variant,
+}: {
+  content: string
+  variant: 'compact' | 'detail'
+}) {
+  const paragraphClassName = variant === 'detail'
+    ? 'text-base font-semibold leading-7 text-white'
+    : 'text-sm font-medium leading-6 text-white'
+  const listClassName = variant === 'detail'
+    ? 'mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-200'
+    : 'mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-200'
+  const components: Components = {
+    p: ({ children }) => <p className={paragraphClassName}>{children}</p>,
+    ul: ({ children }) => <ul className={listClassName}>{children}</ul>,
+    ol: ({ children }) => <ol className={`${listClassName} list-decimal`}>{children}</ol>,
+    li: ({ children }) => <li>{children}</li>,
+    strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+    em: ({ children }) => <em className="italic text-slate-100">{children}</em>,
+    code: ({ children }) => <code className="rounded bg-slate-800 px-1 py-0.5 text-xs text-cyan-200">{children}</code>,
+    a: ({ children, href }) => (
+      <a className="text-cyan-300 underline underline-offset-2 hover:text-cyan-200" href={href} rel="noreferrer" target="_blank">
+        {children}
+      </a>
+    ),
+  }
+
+  return (
+    <div className="space-y-2">
+      <ReactMarkdown components={components}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+function EvidenceItemCard({ item }: { item: ChangeSetEvidenceItemResponse }) {
+  const confidence = formatConfidence(item.confidence)
+
+  return (
+    <li className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-300">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-cyan-200">
+              {item.kind}
+            </span>
+            <span className="break-all font-medium text-white">{item.reference}</span>
+          </div>
+          <p className="leading-6 text-slate-300">{item.summary}</p>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-400">
+        {confidence && <span>confidence {confidence}</span>}
+        {item.source && <span>source {item.source}</span>}
+        {item.eventType && <span>event {item.eventType}</span>}
+        {item.eventId && <span className="break-all">event ID {item.eventId}</span>}
+        {item.occurredAt && <span>observed {formatDateTime(item.occurredAt)}</span>}
+      </div>
+    </li>
+  )
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {
